@@ -1,0 +1,199 @@
+import time
+import random
+import shutil
+import os
+import tempfile
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+
+TARGET_URL = "https://aajkijanta.com/"
+
+# Pool of real User-Agents to rotate per visitor
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",
+]
+
+def scroll_page(driver, scrolls=4):
+    """Top-to-random fast smooth scroll"""
+    driver.execute_script("window.scrollTo(0, 0);")
+    time.sleep(0.3)
+    for _ in range(scrolls):
+        scroll_y = random.randint(300, 1800)
+        driver.execute_script(f"""
+            var target = {scroll_y};
+            var current = window.scrollY;
+            var step = (target - current) / 8;
+            var count = 0;
+            var timer = setInterval(function() {{
+                window.scrollBy(0, step);
+                count++;
+                if (count >= 8) clearInterval(timer);
+            }}, 30);
+        """)
+        time.sleep(random.uniform(0.4, 0.9))
+
+def get_post_links(driver):
+    try:
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.TAG_NAME, "a"))
+        )
+        all_links = driver.find_elements(By.TAG_NAME, "a")
+        post_links = []
+        excluded = ["/category/", "/tag/", "/page/", "/author/",
+                    "#", "?", "/feed", "/wp-", "/contact", "/about"]
+        for link in all_links:
+            href = link.get_attribute("href")
+            if href and TARGET_URL in href and href != TARGET_URL:
+                if not any(exc in href for exc in excluded):
+                    if href not in post_links:
+                        post_links.append(href)
+        return post_links
+    except Exception as e:
+        print(f"      Could not fetch links: {str(e)[:60]}")
+        return []
+
+def visit_post(driver, url, post_num):
+    try:
+        print(f"   📰 Post {post_num}: {url[:60]}...")
+        driver.get(url)
+        time.sleep(random.uniform(1, 2))
+
+        read_time  = random.randint(15, 37)
+        scroll_count = random.randint(3, 8)
+        print(f"   📖 Reading ~{read_time}s | Scrolls: {scroll_count}")
+
+        scroll_page(driver, scrolls=scroll_count)
+
+        elapsed   = scroll_count * 0.65
+        remaining = max(0, read_time - elapsed)
+        if remaining > 0:
+            time.sleep(remaining)
+
+        print("   🏠 Back to homepage...")
+        driver.get(TARGET_URL)
+        time.sleep(random.uniform(1, 2))
+        scroll_page(driver, scrolls=2)
+
+    except Exception as e:
+        print(f"   ❌ Post error: {str(e)[:60]}")
+        try:
+            driver.get(TARGET_URL)
+            time.sleep(1.5)
+        except:
+            pass
+
+def make_driver(profile_dir):
+    """
+    Fresh Chrome with:
+      - Isolated temp profile dir  → new cookies / localStorage every time
+      - Rotated User-Agent         → different device fingerprint
+      - Randomised window size     → different screen fingerprint
+      - All automation flags wiped → GA4 won't flag as bot
+    """
+    ua = random.choice(USER_AGENTS)
+    w  = random.randint(1280, 1920)
+    h  = random.randint(720, 1080)
+
+    options = webdriver.ChromeOptions()
+
+    # ── Isolated fresh profile (critical for new visitor cookie) ──
+    options.add_argument(f"--user-data-dir={profile_dir}")
+
+    # ── Identity spoofing ──
+    options.add_argument(f"--user-agent={ua}")
+    options.add_argument(f"--window-size={w},{h}")
+    options.add_argument(f"--lang=en-US,en;q=0.{random.randint(7,9)}")
+
+    # ── Remove automation signals ──
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
+
+    # ── Stability ──
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+
+    driver = webdriver.Chrome(
+        service=Service(ChromeDriverManager().install()),
+        options=options
+    )
+
+    # Hide webdriver property + spoof plugins/languages
+    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": """
+        Object.defineProperty(navigator, 'webdriver',   {get: () => undefined});
+        Object.defineProperty(navigator, 'plugins',     {get: () => [1, 2, 3, 4, 5]});
+        Object.defineProperty(navigator, 'languages',   {get: () => ['en-US', 'en']});
+        Object.defineProperty(navigator, 'platform',    {get: () => 'Win32'});
+        window.chrome = { runtime: {} };
+    """})
+
+    return driver
+
+def run_visitor(visitor_num, total):
+    num_posts   = random.randint(1, 3)
+    profile_dir = tempfile.mkdtemp(prefix=f"chrome_visitor_{visitor_num}_")
+    print(f"\n👤 Visitor {visitor_num}/{total} | Posts: {num_posts} | Profile: fresh")
+
+    driver = None
+    try:
+        driver = make_driver(profile_dir)
+        print("   ✅ Browser started (new identity)")
+
+        driver.get(TARGET_URL)
+        print("   🌐 Homepage loaded")
+        time.sleep(random.uniform(1.5, 3))
+        scroll_page(driver, scrolls=3)
+
+        post_links = get_post_links(driver)
+
+        if not post_links:
+            print("      No post links found")
+        else:
+            selected = random.sample(post_links, min(num_posts, len(post_links)))
+            for j, url in enumerate(selected, 1):
+                visit_post(driver, url, j)
+                if j < len(selected):
+                    pause = random.uniform(2, 5)
+                    print(f"   💭 Browsing {pause:.0f}s before next post...")
+                    time.sleep(pause)
+
+        print("   ✅ Visitor done")
+
+    except Exception as e:
+        print(f"   ❌ Visitor error: {str(e)[:60]}")
+
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
+        # Delete temp profile → no trace left on disk
+        try:
+            shutil.rmtree(profile_dir, ignore_errors=True)
+        except:
+            pass
+
+def generate_traffic(visits=3):
+    print(f"🚀 Generating {visits} unique visitors → {TARGET_URL}\n")
+    for i in range(visits):
+        run_visitor(i + 1, visits)
+        if i < visits - 1:
+            pause = random.randint(8, 15)
+            print(f"   😴 Next visitor in {pause}s...")
+            time.sleep(pause)
+    print("\n🎉 DONE! Check GA4 Users report!")
+
+if _name_ == "_main_":
+    generate_traffic(random.randint(1, 5))
