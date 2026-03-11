@@ -1,0 +1,60 @@
+import subprocess
+import sys
+import time
+import random
+
+def run_script(script_name):
+    """Run a python script and wait for it to finish"""
+    print(f"\n▶ Starting {script_name}...")
+
+    process = subprocess.Popen(
+        [sys.executable, script_name],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE
+    )
+
+    # Stream output in real-time
+    for line in process.stdout:
+        print(line.decode(), end="")
+
+    process.wait()
+
+    if process.returncode == 0:
+        print(f"✅ {script_name} finished successfully.")
+    else:
+        error = process.stderr.read().decode()
+        print(f"❌ {script_name} exited with error:\n{error}")
+
+    process.stdout.close()
+    process.stderr.close()
+
+    return process.returncode
+
+if _name_ == "_main_":
+    cycle_count = 0
+    print("🔁 Starting automation... Press Ctrl+C to stop.\n")
+    print("="*50)
+
+    try:
+        while True:
+            cycle_count += 1
+            print(f"\n🔄 Cycle #{cycle_count}")
+            print("="*50)
+
+            # Step 1: Run RandomIP.py
+            run_script("RandomIP.py")
+
+            # Small pause between scripts
+            time.sleep(2)
+
+            # Step 2: Run fing.py
+            run_script("fing.py")
+
+            # Random delay before next cycle (1-10 seconds)
+            delay = random.uniform(1, 10)
+            print(f"\n⏳ Waiting {delay:.1f} seconds before next cycle...")
+            time.sleep(delay)
+
+    except KeyboardInterrupt:
+        print(f"\n\n🛑 Stopped by user after {cycle_count} cycle(s).")
+        sys.exit(0)
