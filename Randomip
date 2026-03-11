@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""
+AdGuard VPN CLI Manager - Single Random IP Mode
+Connects to one random VPN location and stays there
+"""
+
+import subprocess
+import sys
+import requests
+import random
+from typing import List, Optional
+from datetime import datetime
+
+
+class AdGuardVPNManager:
+    def _init_(self):
+        self.cli_command = "adguardvpn-cli"
+        self.is_installed = self.check_installation()
+
+    def check_installation(self) -> bool:
+        try:
+            subprocess.run([self.cli_command, "--version"], capture_output=True, check=True, timeout=5)
+            print("✓ AdGuard VPN CLI is installed")
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            print("✗ AdGuard VPN CLI is not installed or not in PATH")
+            return False
+
+    def get_vpn_locations(self) -> List[str]:
+        if not self.is_installed:
+            return []
+        try:
+            result = subprocess.run(
+                [self.cli_command, "list-locations"],
+                capture_output=True, text=True, check=True, timeout=10
+            )
+            locations = []
+            for line in result.stdout.strip().split('\n'):
+                line = line.strip().split(' ')[0]
+                if line and not line.startswith('-'):
+                    locations.append(line)
+            return locations if locations else self._get_default_locations()
+        except Exception as e:
+            print(f"✗ Error fetching locations: {e}")
+            return self._get_default_locations()
+
+    def _get_default_locations(self) -> List[str]:
+        return ['Frankfurt', 'Warsaw', 'Paris', 'Amsterdam', 'Milan', 'London', 'Helsinki', 'New York', 'Miami', 'Dallas']
+
+    def connect_vpn(self, location: str) -> bool:
+        if not self.is_installed:
+            return False
+        try:
+            print(f"[{self._get_timestamp()}] Connecting to {location}...")
+            result = subprocess.run(
+                [self.cli_command, "connect", "-l", location],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode == 0:
+                print(f"[{self._get_timestamp()}] ✓ Successfully connected to {location}")
+                return True
+            else:
+                print(f"[{self._get_timestamp()}] ✗ Failed to connect: {result.stderr}")
+                return False
+        except subprocess.TimeoutExpired:
+            print(f"[{self._get_timestamp()}] ✗ Connection timed out")
+            return False
+        except Exception as e:
+            print(f"[{self._get_timestamp()}] ✗ Error: {e}")
+            return False
+
+    def get_global_ip(self) -> Optional[str]:
+        try:
+            response = requests.get("https://api.ipify.org?format=json", timeout=5)
+            response.raise_for_status()
+            return response.json().get("ip")
+        except Exception as e:
+            print(f"✗ Error fetching IP: {e}")
+            return None
+
+    @staticmethod
+    def _get_timestamp() -> str:
+        return datetime.now().strftime("%H:%M:%S")
+
+
+def main():
+    print("\n" + "="*50)
+    print("   AdGuard VPN - Single Random IP Mode")
+    print("="*50 + "\n")
+
+    manager = AdGuardVPNManager()
+
+    if not manager.is_installed:
+        print("✗ AdGuard VPN CLI is not installed.")
+        sys.exit(1)
+
+    # Show current IP before connecting
+    print("Fetching current IP...")
+    current_ip = manager.get_global_ip()
+    if current_ip:
+        print(f"Current IP : {current_ip}")
+
+    # Get locations and pick one random location
+    locations = manager.get_vpn_locations()
+    if not locations:
+        print("✗ No VPN locations available. Exiting.")
+        sys.exit(1)
+
+    selected_location = random.choice(locations)
+    print(f"\n🎲 Randomly selected location: {selected_location}")
+
+    # Connect to the selected location
+    if manager.connect_vpn(selected_location):
+        import time
+        time.sleep(2)  # Wait for connection to establish
+
+        # Show new IP
+        print("\nFetching new IP...")
+        new_ip = manager.get_global_ip()
+        if new_ip:
+            print(f"New IP     : {new_ip}")
+
+        print(f"\n✅ Connected to {selected_location} and staying here.")
+        print("   Run the script again to get a new random location.")
+    else:
+        print(f"\n❌ Failed to connect to {selected_location}. Try running again.")
+        sys.exit(1)
+
+
+if _name_ == "_main_":
+    main()
