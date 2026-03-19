@@ -1,10 +1,12 @@
-import requests
 import time
 import random
-import re
-from urllib.parse import urljoin
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+import os
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
 
 TARGET_URL = "https://aajkijanta.com/"
 
@@ -18,148 +20,199 @@ USER_AGENTS = [
     "Mozilla/5.0 (Linux; Android 13; SM-A135F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
 ]
 
-REFERRERS = [
-    "https://www.google.com/",
-    "https://www.google.co.in/",
-    "https://www.bing.com/",
-    "https://duckduckgo.com/",
-    "https://www.facebook.com/",
-    "https://www.twitter.com/",
-]
+def scroll_page(driver, scrolls=3):
+    """Simulate user scrolling"""
+    driver.execute_script("window.scrollTo(0, 0);")
+    time.sleep(0.2)
+    for _ in range(scrolls):
+        scroll_y = random.randint(200, 800)
+        driver.execute_script(f"window.scrollBy(0, {scroll_y});")
+        time.sleep(random.uniform(0.3, 0.7))
 
-def create_session():
-    """Create a session with retries and proper headers"""
-    session = requests.Session()
-    
-    # Retry strategy for network issues
-    retry = Retry(
-        total=3,
-        backoff_factor=0.3,
-        status_forcelist=[500, 502, 503, 504]
-    )
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    
-    # Random headers
-    session.headers.update({
-        "User-Agent": random.choice(USER_AGENTS),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate",
-        "Referer": random.choice(REFERRERS),
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-    })
-    
-    return session
-
-def get_post_links(session, html_content):
-    """Extract post links from HTML"""
+def get_post_links(driver):
+    """Extract post links from the page"""
     try:
-        # Find all href links
-        links = re.findall(r'href=["\'](https?://[^\s"\'<>]+)["\']', html_content)
-        
+        WebDriverWait(driver, 8).until(
+            EC.presence_of_element_located((By.TAG_NAME, "a"))
+        )
+        all_links = driver.find_elements(By.TAG_NAME, "a")
         post_links = []
         excluded = ["/category/", "/tag/", "/page/", "/author/",
-                    "#", "?", "/feed", "/wp-", "/contact", "/about", ".png", ".jpg", ".pdf"]
+                    "#", "?", "/feed", "/wp-", "/contact", "/about"]
         
-        for link in links:
-            if TARGET_URL in link and link != TARGET_URL:
-                if not any(exc in link for exc in excluded):
-                    if link not in post_links:
-                        post_links.append(link)
+        for link in all_links:
+            href = link.get_attribute("href")
+            if href and TARGET_URL in href and href != TARGET_URL:
+                if not any(exc in href for exc in excluded):
+                    if href not in post_links:
+                        post_links.append(href)
         
-        return post_links[:15]  # Return max 15 links to avoid overload
+        return post_links[:10]  # Limit to 10 to save Pi resources
     except Exception as e:
-        print(f"      Could not parse links: {str(e)[:60]}")
+        print(f"      Could not fetch links: {str(e)[:60]}")
         return []
 
-def visit_post(session, url, post_num):
+def visit_post(driver, url, post_num):
     """Visit a post and simulate reading"""
     try:
         print(f"   📰 Post {post_num}: {url[:60]}...")
+        driver.get(url)
+        time.sleep(random.uniform(1, 1.5))
         
-        # Randomize headers for each request
-        session.headers["User-Agent"] = random.choice(USER_AGENTS)
-        session.headers["Referer"] = random.choice(REFERRERS)
+        read_time = random.randint(12, 30)
+        scroll_count = random.randint(2, 4)
+        print(f"   📖 Reading ~{read_time}s | Scrolls: {scroll_count}")
         
-        response = session.get(url, timeout=10)
+        scroll_page(driver, scrolls=scroll_count)
         
-        if response.status_code == 200:
-            read_time = random.randint(10, 25)
-            print(f"   📖 Reading ~{read_time}s...")
-            time.sleep(read_time)
-            print(f"   ✅ Post viewed")
-        else:
-            print(f"   ⚠️  Status code: {response.status_code}")
-            
-    except requests.exceptions.Timeout:
-        print(f"   ❌ Request timeout")
-    except requests.exceptions.RequestException as e:
-        print(f"   ❌ Request error: {str(e)[:60]}")
+        # Complete reading time
+        elapsed = scroll_count * 0.5
+        remaining = max(0, read_time - elapsed)
+        if remaining > 0:
+            time.sleep(remaining)
+        
+        print("   ✅ Post viewed")
+        
+    except Exception as e:
+        print(f"   ❌ Post error: {str(e)[:60]}")
+
+def make_driver():
+    """
+    Create headless Chrome driver optimized for Pi 3
+    """
+    ua = random.choice(USER_AGENTS)
+    
+    options = Options()
+    
+    # ── Headless mode (no GUI, saves memory) ──
+    options.add_argument("--headless=new")
+    
+    # ── Use system Chromium ──
+    options.binary_location = "/usr/bin/chromium-browser"
+    
+    # ── Identity spoofing ──
+    options.add_argument(f"--user-agent={ua}")
+    options.add_argument(f"--lang=en-US,en;q=0.9")
+    
+    # ── Memory optimization for Pi 3 ──
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-plugins")
+    options.add_argument("--disable-images")  # Don't load images (saves bandwidth)
+    
+    # ── Remove automation signals ──
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
+    
+    # ── Performance ──
+    options.add_argument("--disable-sync")
+    options.add_argument("--no-first-run")
+    options.add_argument("--no-default-browser-check")
+    
+    try:
+        driver = webdriver.Chrome(
+            service=Service("/usr/bin/chromedriver"),
+            options=options
+        )
+        
+        # Hide webdriver property
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": """
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3]});
+                Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+            """
+        })
+        
+        return driver
+    except Exception as e:
+        print(f"❌ Failed to create driver: {e}")
+        print("Make sure Chromium is installed: sudo apt install chromium-browser chromium-chromedriver")
+        return None
 
 def run_visitor(visitor_num, total):
     """Simulate one unique visitor"""
-    num_posts = random.randint(1, 4)
+    num_posts = random.randint(1, 3)
     print(f"\n👤 Visitor {visitor_num}/{total} | Posts: {num_posts}")
     
+    driver = None
     try:
-        session = create_session()
-        
-        # Visit homepage
-        print("   🌐 Visiting homepage...")
-        response = session.get(TARGET_URL, timeout=10)
-        
-        if response.status_code != 200:
-            print(f"   ❌ Failed to reach homepage: {response.status_code}")
+        driver = make_driver()
+        if not driver:
             return
         
-        time.sleep(random.uniform(1, 2))
+        print("   ✅ Browser started (headless)")
         
-        # Get post links
-        post_links = get_post_links(session, response.text)
+        # Load homepage
+        print("   🌐 Homepage loading...")
+        driver.get(TARGET_URL)
+        time.sleep(random.uniform(1.5, 2.5))
+        
+        # Wait for page to load and GA4 script to execute
+        try:
+            WebDriverWait(driver, 5).until(
+                lambda d: d.execute_script("return document.readyState") == "complete"
+            )
+        except:
+            pass
+        
+        scroll_page(driver, scrolls=2)
+        print("   ✅ Homepage viewed (GA4 tracked)")
+        
+        # Get posts
+        post_links = get_post_links(driver)
         
         if not post_links:
             print("      No post links found")
         else:
             selected = random.sample(post_links, min(num_posts, len(post_links)))
             for j, url in enumerate(selected, 1):
-                visit_post(session, url, j)
+                visit_post(driver, url, j)
                 if j < len(selected):
-                    pause = random.uniform(1.5, 3.5)
-                    print(f"   💭 Browsing {pause:.1f}s before next post...")
+                    pause = random.uniform(2, 4)
+                    print(f"   💭 Browsing {pause:.0f}s before next post...")
                     time.sleep(pause)
         
         # Return to homepage
         print("   🏠 Back to homepage...")
-        session.get(TARGET_URL, timeout=10)
+        driver.get(TARGET_URL)
         time.sleep(random.uniform(0.5, 1))
         
         print("   ✅ Visitor done")
-        session.close()
         
     except Exception as e:
         print(f"   ❌ Visitor error: {str(e)[:60]}")
+    
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
 
 def generate_traffic(visits=3):
     """Generate traffic from multiple visitors"""
-    print(f"🚀 Lightweight Traffic Generator")
+    print(f"🚀 GA4 Traffic Generator (Headless Chromium)")
     print(f"🚀 Generating {visits} unique visitors → {TARGET_URL}\n")
+    print("📊 Each visitor WILL show in GA4 (JavaScript executed)\n")
     
     for i in range(visits):
         run_visitor(i + 1, visits)
         if i < visits - 1:
-            pause = random.randint(5, 12)
+            pause = random.randint(8, 15)
             print(f"   😴 Next visitor in {pause}s...\n")
             time.sleep(pause)
     
     print("\n🎉 DONE! Traffic generation complete!")
-    print("📊 Check your analytics to see the visits!")
+    print("📊 Check GA4 Realtime report (should show visitors immediately)")
+    print("📊 Check GA4 Users report (updates within 24-48 hours)")
 
 if __name__ == "__main__":
     try:
-        visits = random.randint(2, 5)
+        visits = random.randint(2, 4)
         generate_traffic(visits)
     except KeyboardInterrupt:
         print("\n\n⏹️  Stopped by user")
